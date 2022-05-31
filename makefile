@@ -5,7 +5,7 @@ SRC=$(wildcard *.cpp)
 OBJ:=$(SRC:.cpp=.o)
 INCLUDE=
 DEP_LIB_PATH=
-DEP_LIB=
+DEP_LIB=-lpthread
 
 CXXFALG=-std=c++11 -g
 
