@@ -20,18 +20,18 @@ void onRead(SpChannel chan)
     int ret = recv(chan->_fd, recvBuffer, sizeof(recvBuffer), 0);
     if (ret == 0) {
         minilog(LogLevel_e::WARRNIG, "peer close");
-        re->DelChannel(chan);
+        re->PushChannel(ActionType_e::DELETE, chan);
     }
     else if (ret < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
         minilog(LogLevel_e::ERROR, strerror(errno));
-        re->DelChannel(chan);
+        re->PushChannel(ActionType_e::DELETE, chan);
     }
     else {
         chan->_buffer.clear();
         chan->_buffer = recvBuffer;
         std::transform(chan->_buffer.begin(), chan->_buffer.end(), chan->_buffer.begin(), ::toupper);
-        chan->_events = ChannelEvent_e::OUT;
-        re->ModChannel(chan);
+        chan->_events |= ChannelEvent_e::OUT;
+        re->PushChannel(ActionType_e::MODIFY, chan);
     }
     return;
 }
@@ -47,7 +47,7 @@ void onSend(SpChannel chan)
     }
     if (chan->_buffer.empty()) {
         chan->_events = ChannelEvent_e::IN;
-        re->ModChannel(chan);
+        re->PushChannel(ActionType_e::MODIFY, chan);
     }
     return;
 }
@@ -68,7 +68,7 @@ void onConnect(SpChannel chan)
     }
     else {
         fcntl(clientFd, F_SETFL, O_NONBLOCK);
-        re->AddChannel(CreateSpChannelReadSend(clientFd, re, ChannelEvent_e::IN, onRead, onSend, nullptr));
+        re->PushChannel(ActionType_e::ADD, CreateSpChannelReadSend(clientFd, re, ChannelEvent_e::IN, onRead, onSend, nullptr));
     }
 }
 
@@ -77,14 +77,20 @@ int main()
     sem_init(sem, 0, 0);
     signal(SIGINT, signal_handler);
     
-    SpReactor spRe = CreateSpReactor();
-    spRe->AddChannel(CreateSpChannelListen(12222, spRe, onConnect, nullptr));
-    MiniThread reThread;
-    reThread.AddWorker(spRe);
-    reThread.Start();
+    SpReactor listenRe = CreateSpReactor("listen reactor");
+    SpReactor subRe = CreateSpReactor("sub reactor");
+    MiniThread listenThrd;
+    listenThrd.AddWorker(listenRe);
+    listenThrd.Start();
+    MiniThread subThrd;
+    subThrd.AddWorker(subRe);
+    subThrd.Start();
+
+    listenRe->PushChannel(ActionType_e::ADD, CreateSpChannelListen(12222, subRe, onConnect, nullptr));
 
     sem_wait(sem);
-    reThread.Stop();
+    //listenThrd.Stop();
+    //subThrd.Stop();
     printf("main end\n");
     return 0;
 }

@@ -54,6 +54,7 @@ void MiniThread::AddWorker(SpWorker worker)
 {
 	std::lock_guard<std::mutex> lock(_threadMutex);
 	_workers.emplace_back(worker);
+	worker->SetThreadId(_thread.get_id());
 }
 
 void MiniThread::DelWorker(SpWorker worker) {
@@ -70,8 +71,12 @@ void MiniThread::Work()
 		std::lock_guard<std::mutex> lock(_threadMutex);
 		for (auto worker : _workers) {
 			if (worker) {
-				if (!worker->Work()) {
-					DelWorker(worker);
+				if (!worker->Work())
+				{
+					auto iter = std::find(_workers.begin(), _workers.end(), worker);
+					if (_workers.end() != iter){
+						_workers.erase(iter);
+					}
 					break;
 				}
 			}

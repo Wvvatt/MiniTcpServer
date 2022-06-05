@@ -11,7 +11,7 @@ struct Channel
 {
 	Channel() = delete;;
 	Channel(int fd, std::shared_ptr<void> priv, int evt, CallBackFunc connect, CallBackFunc read, CallBackFunc send, CallBackFunc error);
-	~Channel() = default;
+	~Channel();
 	int _fd;
 	std::shared_ptr<void> _priv;
 	int _events;
@@ -32,6 +32,13 @@ Channel::Channel(int fd, std::shared_ptr<void> priv, int evt, CallBackFunc conne
 	_onError(error)
 {
 	_buffer.clear();
+}
+
+Channel::~Channel()
+{
+	if(_fd){
+		close(_fd);
+	}
 }
 
 SpChannel CreateSpChannel(int fd, std::shared_ptr<void> priv, int evt, CallBackFunc connect, CallBackFunc read, CallBackFunc send, CallBackFunc error)

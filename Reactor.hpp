@@ -1,14 +1,4 @@
 #pragma once
-// c common
-#include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <errno.h>
-// net
-#include <arpa/inet.h>	// ip
-#include <sys/socket.h> // tcp/udp
-#include <fcntl.h>		// ctrl socket
-#include <sys/epoll.h>	// epoll
 // c++ utils
 #include <functional>
 #include <vector>
@@ -22,29 +12,29 @@
 #include "Channel.hpp"
 #include "WorkerInterface.h"
 #include "MiniLog.hpp"
+#include "EpollWrapper.hpp"
 
-constexpr int MAX_EVENT = 2048;
+enum class ActionType_e
+{
+	ADD = 0,
+	DELETE,
+	MODIFY
+};
 
-class Reactor;
-using SpReactor = std::shared_ptr<Reactor>;
 class Reactor : public WorkerInterface
 {
 public:
-	Reactor();
+	Reactor() = delete;
+	explicit Reactor(const std::string &);
 	~Reactor();
 	bool Work() override;
+	void SetThreadId(const std::thread::id &) override;
 	void Close();
-	void AddChannel(SpChannel);
-	void DelChannel(SpChannel);
-	void ModChannel(SpChannel);
-
+	void PushChannel(ActionType_e, SpChannel);
+	bool isInSelfWorkThread() { return std::this_thread::get_id() == _thrdId; }
+	void WakeUp();
+	std::string GetName() const {return _name;};
 private:
-	enum class ActionType_e
-	{
-		ADD,
-		DELETE,
-		MODIFY
-	};
 	struct ChannelAction
 	{
 		ActionType_e action;
@@ -53,16 +43,34 @@ private:
 	void handlePendingChannel();
 
 private:
+	std::string _name;
 	std::mutex _pendingMutex;
 	std::queue<ChannelAction> _pendingChanlActions;
-	int _epoll;
-	std::map<int, SpChannel> _channels;
+	SpEpoll _epoll;
 	bool _running;
-	void *_owner;
+	std::thread::id _thrdId;
+	int _wakeUpFd[2];
 };
 
-Reactor::Reactor() : _epoll(epoll_create(MAX_EVENT))
+Reactor::Reactor(const std::string &name) : _name(name),
+											_epoll(CreateSpEpoll())
 {
+	socketpair(AF_UNIX, SOCK_STREAM, 0, _wakeUpFd);
+	auto wakeUpChannel = CreateSpChannelReadSend(_wakeUpFd[1], nullptr, ChannelEvent_e::IN,
+		[this](SpChannel chan) {
+			int fd = chan->_fd;
+			char one = {};
+			int n = read(fd, &one, sizeof(one));
+			if(n != sizeof(one)){
+				minilog(LogLevel_e::ERROR, "[%s] wakeup failed!", this->GetName().c_str());
+			}
+			else{
+				minilog(LogLevel_e::INFO, "[%s] wake up!", this->GetName().c_str());
+			}
+		},
+		nullptr,
+		nullptr);
+	_epoll->Add(wakeUpChannel);
 }
 
 Reactor::~Reactor()
@@ -72,50 +80,31 @@ Reactor::~Reactor()
 
 void Reactor::Close()
 {
-	for (auto iter = _channels.begin(); iter != _channels.end(); iter++)
-	{
-		close(iter->second->_fd);
-	}
-	_channels.clear();
-	close(_epoll);
+
 }
 
 bool Reactor::Work()
 {
-	epoll_event activeEvts[MAX_EVENT] = {};
-	auto activeFds = epoll_wait(_epoll, activeEvts, MAX_EVENT, 1000);
-	if (activeFds < 0)
+	auto activeChans = _epoll->Poll(1000);
+	for (auto chan : activeChans)
 	{
-		minilog(LogLevel_e::ERROR, "epoll_wait error, break");
-		return false;
-	}
-	for (int i = 0; i < activeFds; i++)
-	{
-		int fd = activeEvts[i].data.fd;
-		auto chanIter = _channels.find(fd);
-		if (chanIter == _channels.end())
+		if (chan->_events & ChannelEvent_e::IN)
 		{
-			minilog(LogLevel_e::ERROR, "unknown fd(%d) is actived!", fd);
-			continue;
-		}
-		auto spChan = chanIter->second;
-		if (spChan->_events & EPOLLIN)
-		{
-			if (spChan->_onConnect)
+			if (chan->_onConnect)
 			{
-				spChan->_onConnect(spChan);
+				chan->_onConnect(chan);
 				continue;
 			}
-			if (spChan->_onRead)
+			if (chan->_onRead)
 			{
-				spChan->_onRead(spChan);
+				chan->_onRead(chan);
 			}
 		}
-		if (spChan->_events & EPOLLOUT)
+		if (chan->_events & ChannelEvent_e::OUT)
 		{
-			if (spChan->_onSend)
+			if (chan->_onSend)
 			{
-				spChan->_onSend(spChan);
+				chan->_onSend(chan);
 			}
 		}
 	}
@@ -123,22 +112,31 @@ bool Reactor::Work()
 	return true;
 }
 
-void Reactor::AddChannel(SpChannel chan)
+void Reactor::SetThreadId(const std::thread::id &id)
 {
-	std::lock_guard<std::mutex> lock(_pendingMutex);
-	_pendingChanlActions.push({ActionType_e::ADD, chan});
+	_thrdId = id;
 }
 
-void Reactor::DelChannel(SpChannel chan)
+void Reactor::PushChannel(ActionType_e action, SpChannel chan)
 {
-	std::lock_guard<std::mutex> lock(_pendingMutex);
-	_pendingChanlActions.push({ActionType_e::DELETE, chan});
+	{
+		std::lock_guard<std::mutex> lock(_pendingMutex);
+		//minilog(LogLevel_e::DEBUG, "action = %d, channel(fd = %d, events = %d)", action, chan->_fd, chan->_events);
+		_pendingChanlActions.push({action, chan});
+	}
+	if (!isInSelfWorkThread())
+	{
+		WakeUp();
+	}
 }
 
-void Reactor::ModChannel(SpChannel chan)
+void Reactor::WakeUp()
 {
-	std::lock_guard<std::mutex> lock(_pendingMutex);
-	_pendingChanlActions.push({ActionType_e::MODIFY, chan});
+	char one = '1';
+	auto n = write(_wakeUpFd[0], &one, sizeof(one));
+	if(n != sizeof(one)){
+		minilog(LogLevel_e::ERROR, "can't wakeup this epoll loop");
+	}
 }
 
 void Reactor::handlePendingChannel()
@@ -149,60 +147,48 @@ void Reactor::handlePendingChannel()
 		auto chaAct = _pendingChanlActions.front();
 		auto channel = chaAct.channel;
 		auto action = chaAct.action;
-		int fd = channel->_fd;
+		minilog(LogLevel_e::DEBUG, "[%s] handle channel(fd = %d, events = %ld), action = %d", _name.c_str(), channel->_fd, channel->_events, action);
 		if (action == ActionType_e::ADD)
 		{
-			epoll_event evt = {};
-			if (_channels.find(fd) != _channels.end())
+			if (_epoll->IsChannelInEpoll(channel))
 			{
-				minilog(LogLevel_e::WARRNIG, "channel(fd = %d) has already in epoll(fd = %d), so modify", channel->_fd, _epoll);
+				minilog(LogLevel_e::WARRNIG, "[%s] channel(fd = %d) has already in epoll(fd = %d), so modify", _name.c_str(), channel->_fd, _epoll);
 				_pendingChanlActions.pop();
 				_pendingChanlActions.push({ActionType_e::MODIFY, channel});
 				continue;
 			}
-			evt.events = channel->_events;
-			evt.data.fd = fd;
-			epoll_ctl(_epoll, EPOLL_CTL_ADD, fd, &evt);
-			_channels[fd] = channel;
-			minilog(LogLevel_e::DEBUG, "Add new channel(fd = %d, events = %d), sum to %ld channels", channel->_fd, channel->_events, _channels.size());
+			_epoll->Add(channel);
+			//minilog(LogLevel_e::DEBUG, "[%s] Add new channel(fd = %d, events = %d), sum to %ld channels", _name.c_str(), channel->_fd, channel->_events, _epoll->GetChannelNum());
 		}
 		else if (action == ActionType_e::DELETE)
 		{
-			if (_channels.find(channel->_fd) == _channels.end())
+			if (!_epoll->IsChannelInEpoll(channel))
 			{
-				minilog(LogLevel_e::WARRNIG, "This channel(fd = %d) is not in epoll(fd = %d)", channel->_fd, _epoll);
+				minilog(LogLevel_e::WARRNIG, "[%s] This channel(fd = %d) is not in epoll(fd = %d)", _name.c_str(), channel->_fd, _epoll);
 				_pendingChanlActions.pop();
 				continue;
 			}
-			epoll_event evt = {};
-			evt.data.fd = fd;
-			epoll_ctl(_epoll, EPOLL_CTL_DEL, channel->_fd, &evt);
-			close(fd);
-			_channels[fd].reset();
-			_channels.erase(fd);
-			minilog(LogLevel_e::DEBUG, "Delete channel(fd = %d), sum to %ld channels", channel->_fd, _channels.size());
+			_epoll->Delete(channel);
+			//minilog(LogLevel_e::DEBUG, "[%s] Delete channel(fd = %d), sum to %ld channels", _name.c_str(), channel->_fd, _epoll->GetChannelNum());
 		}
 		else if (action == ActionType_e::MODIFY)
 		{
-			if (_channels.find(channel->_fd) == _channels.end())
+			if (!_epoll->IsChannelInEpoll(channel))
 			{
-				minilog(LogLevel_e::ERROR, "This channel(fd = %d) is not in epoll(fd = %d)", channel->_fd, _epoll);
+				minilog(LogLevel_e::ERROR, "[%s] This channel(fd = %d) is not in epoll(fd = %d)", _name.c_str(), channel->_fd, _epoll);
 				_pendingChanlActions.pop();
 				continue;
 			}
-			int oldEvents = _channels[fd]->_events;
-			epoll_event evt = {};
-			evt.events = channel->_events;
-			evt.data.fd = fd;
-			epoll_ctl(_epoll, EPOLL_CTL_MOD, fd, &evt);
-			_channels[fd] = channel;
-			minilog(LogLevel_e::DEBUG, "Modify channel(fd = %d), events : %d -> %d", channel->_fd, oldEvents, channel->_events);
+			_epoll->Modify(channel);
+			//minilog(LogLevel_e::DEBUG, "[%s] Modify channel(fd = %d) to event %d", _name.c_str(), channel->_fd, channel->_events);
 		}
 		_pendingChanlActions.pop();
 	}
 }
 
-SpReactor CreateSpReactor()
+/*--------------- shared_ptr -----------*/
+using SpReactor = std::shared_ptr<Reactor>;
+SpReactor CreateSpReactor(const std::string &name)
 {
-	return std::make_shared<Reactor>();
+	return std::make_shared<Reactor>(name);
 }
