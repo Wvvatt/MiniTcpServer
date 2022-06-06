@@ -55,6 +55,7 @@ bool EpollWrapper::Add(SpChannel chan)
     }
     else{
         _channels[fd] = chan;
+        return true;
     } 
 }
 
@@ -74,6 +75,7 @@ bool EpollWrapper::Delete(SpChannel chan)
         close(fd);
         _channels[fd].reset();
         _channels.erase(fd);
+        return true;
     }
 }
 
@@ -92,6 +94,7 @@ bool EpollWrapper::Modify(SpChannel chan, int evts)
     }
     else{
         _channels[fd]->SetEvents(evts);
+        return true;
     }
 }
 
