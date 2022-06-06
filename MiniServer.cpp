@@ -13,53 +13,55 @@ static void signal_handler(int sig_num)
     printf("exit\n");
     sem_post(sem);
 }
+
 void onRead(SpChannel chan)
 {
-    SpReactor re = std::static_pointer_cast<Reactor>(chan->_priv);
+    int fd = chan->GetSocket();
+    SpReactor re = std::static_pointer_cast<Reactor>(chan->GetSpPrivData());
     char recvBuffer[1024] = {};
-    int ret = recv(chan->_fd, recvBuffer, sizeof(recvBuffer), 0);
+    int ret = recv(fd, recvBuffer, sizeof(recvBuffer), 0);
+    minilog(LogLevel_e::DEBUG, "onRead ret = %d", ret);
     if (ret == 0) {
         minilog(LogLevel_e::WARRNIG, "peer close");
-        re->PushChannel(ActionType_e::DELETE, chan);
+        re->DelChannel(chan);
     }
     else if (ret < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
         minilog(LogLevel_e::ERROR, strerror(errno));
-        re->PushChannel(ActionType_e::DELETE, chan);
+        re->DelChannel(chan);
     }
     else {
-        chan->_buffer.clear();
-        chan->_buffer = recvBuffer;
-        std::transform(chan->_buffer.begin(), chan->_buffer.end(), chan->_buffer.begin(), ::toupper);
-        chan->_events |= ChannelEvent_e::OUT;
-        re->PushChannel(ActionType_e::MODIFY, chan);
+        chan->GetBuffer().clear();
+        chan->GetBuffer() = recvBuffer;
+        std::transform(chan->GetBuffer().begin(), chan->GetBuffer().end(), chan->GetBuffer().begin(), ::toupper);
+        re->EnableEvents(chan, ChannelEvent_e::OUT);
     }
     return;
 }
 
 void onSend(SpChannel chan)
 {
-    SpReactor re = std::static_pointer_cast<Reactor>(chan->_priv);
-    if (!chan->_buffer.empty()) {
-        auto sendLen = send(chan->_fd, chan->_buffer.c_str(), chan->_buffer.size(), 0);
+    SpReactor re = std::static_pointer_cast<Reactor>(chan->GetSpPrivData());
+    if (!chan->GetBuffer().empty()) {
+        auto sendLen = send(chan->GetSocket(), chan->GetBuffer().c_str(), chan->GetBuffer().size(), 0);
+        minilog(LogLevel_e::DEBUG, "onSend sendLen = %d", sendLen);
         if (sendLen > 0) {
-            chan->_buffer = chan->_buffer.substr(sendLen);
+            chan->GetBuffer() = chan->GetBuffer().substr(sendLen);
         }
     }
-    if (chan->_buffer.empty()) {
-        chan->_events = ChannelEvent_e::IN;
-        re->PushChannel(ActionType_e::MODIFY, chan);
+    if (chan->GetBuffer().empty()) {
+        re->DisableEvents(chan, ChannelEvent_e::OUT);
     }
     return;
 }
 
 void onConnect(SpChannel chan)
 {
-    SpReactor re = std::static_pointer_cast<Reactor>(chan->_priv);
-    int fd = chan->_fd;
+    SpReactor re = std::static_pointer_cast<Reactor>(chan->GetSpPrivData());
+    int fd = chan->GetSocket();
     sockaddr_in clientAddr = {};
     socklen_t len = sizeof(clientAddr);
     int clientFd = accept(fd, (sockaddr*)&clientAddr, &len);
-    minilog(LogLevel_e::INFO, "accept client address : %s:%d", inet_ntoa(clientAddr.sin_addr), clientAddr.sin_port);
+    minilog(LogLevel_e::INFO, "accept client address : %s:%d", inet_ntoa(clientAddr.sin_addr), htons(clientAddr.sin_port));
     if (clientFd == -1) {
         if (errno != EAGAIN && errno != EINTR) {
             return;
@@ -68,7 +70,7 @@ void onConnect(SpChannel chan)
     }
     else {
         fcntl(clientFd, F_SETFL, O_NONBLOCK);
-        re->PushChannel(ActionType_e::ADD, CreateSpChannelReadSend(clientFd, re, ChannelEvent_e::IN, onRead, onSend, nullptr));
+        re->AddChannel(CreateSpChannelReadSend(clientFd, re, ChannelEvent_e::IN, onRead, onSend, nullptr));
     }
 }
 
@@ -86,7 +88,7 @@ int main()
     subThrd.AddWorker(subRe);
     subThrd.Start();
 
-    listenRe->PushChannel(ActionType_e::ADD, CreateSpChannelListen(12222, subRe, onConnect, nullptr));
+    listenRe->AddChannel(CreateSpChannelListen(12222, subRe, onConnect, nullptr));
 
     sem_wait(sem);
     //listenThrd.Stop();

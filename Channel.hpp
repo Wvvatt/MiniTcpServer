@@ -3,17 +3,42 @@
 #include <memory>
 #include "utils.h"
 
-struct Channel;
+class Channel;
 using SpChannel = std::shared_ptr<Channel>;
 using CallBackFunc = std::function<void(SpChannel)>;
-
-struct Channel
+class EpollWrapper;
+class Channel : public std::enable_shared_from_this<Channel>
 {
+	friend class EpollWrapper;
+public:
 	Channel() = delete;;
 	Channel(int fd, std::shared_ptr<void> priv, int evt, CallBackFunc connect, CallBackFunc read, CallBackFunc send, CallBackFunc error);
+	Channel(const Channel&) = delete;
 	~Channel();
+
+	int GetSocket() const { return _fd;}
+	int GetEvents() const { return _events;}
+	std::shared_ptr<void> GetSpPrivData() { return _priv.lock();}
+	bool isListenChannel() const { return _onConnect != nullptr;}
+
+	void HandleConnect(){
+		if (_onConnect) _onConnect(shared_from_this());
+	}
+	void HandleRead(){
+		if (_onRead) _onRead(shared_from_this());
+	}
+	void HandleSend(){
+		if (_onSend) _onSend(shared_from_this());
+	}
+	void HandleError(){
+		if (_onError) _onError(shared_from_this());
+	}
+	std::string& GetBuffer() { return _buffer;}
+private:
+	void SetEvents(int evts) { _events = evts;}
+private:
 	int _fd;
-	std::shared_ptr<void> _priv;
+	std::weak_ptr<void> _priv;		//使用weak_ptr避免出现循环引用
 	int _events;
 	CallBackFunc _onConnect;;
 	CallBackFunc _onRead;
@@ -41,6 +66,8 @@ Channel::~Channel()
 	}
 }
 
+
+/*--------------------------------- shared_ptr --------------------*/
 SpChannel CreateSpChannel(int fd, std::shared_ptr<void> priv, int evt, CallBackFunc connect, CallBackFunc read, CallBackFunc send, CallBackFunc error)
 {
 	return std::make_shared<Channel>(fd, priv, evt, connect, read, send, error);

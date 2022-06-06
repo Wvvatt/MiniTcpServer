@@ -12,13 +12,14 @@ class EpollWrapper
 public:
     EpollWrapper();
     ~EpollWrapper();
-    void Add(SpChannel);
-    void Delete(SpChannel);
-    void Modify(SpChannel);
+    bool Add(SpChannel);
+    bool Delete(SpChannel);
+    bool Modify(SpChannel, int);
     std::vector<SpChannel> Poll(int);
 
     bool IsChannelInEpoll(SpChannel) const;
     size_t GetChannelNum() const;
+    int GetEpollFd() const { return _epoll;}
 private:
     int _epoll;
     std::map<int, SpChannel> _channels;
@@ -32,38 +33,66 @@ EpollWrapper::EpollWrapper():
 
 EpollWrapper::~EpollWrapper()
 {
+    for (auto iter = _channels.begin(); iter != _channels.end(); iter++){
+        close(iter->first);
+    }
+    _channels.clear();
     close(_epoll);
 }
 
-void EpollWrapper::Add(SpChannel chan) 
+bool EpollWrapper::Add(SpChannel chan) 
 {
-    int fd = chan->_fd;
+    int fd = chan->GetSocket();
+    if(_channels.find(fd) != _channels.end()){
+        return true;
+    }
     epoll_event evt{};
-    evt.events = chan->_events;
+    evt.events = chan->GetEvents();
     evt.data.fd = fd;
-    epoll_ctl(_epoll, EPOLL_CTL_ADD, fd, &evt);
-    _channels[fd] = chan;
+    if(epoll_ctl(_epoll, EPOLL_CTL_ADD, fd, &evt) < 0){
+        minilog(LogLevel_e::ERROR, "epoll ctl add error = %s", strerror(errno));
+        return false;
+    }
+    else{
+        _channels[fd] = chan;
+    } 
 }
 
-void EpollWrapper::Delete(SpChannel chan)
+bool EpollWrapper::Delete(SpChannel chan)
 {
-    int fd = chan->_fd;
+    int fd = chan->GetSocket();
+    if(_channels.find(fd) == _channels.end()){
+        return true;
+    }
     epoll_event evt{};
     evt.data.fd = fd;
-    epoll_ctl(_epoll, EPOLL_CTL_DEL, fd, &evt);
-    close(fd);
-    _channels[fd].reset();
-	_channels.erase(fd);
+    if(epoll_ctl(_epoll, EPOLL_CTL_DEL, fd, &evt) < 0){
+        minilog(LogLevel_e::ERROR, "epoll ctl del error = %s", strerror(errno));
+        return false;
+    }
+    else{
+        close(fd);
+        _channels[fd].reset();
+        _channels.erase(fd);
+    }
 }
 
-void EpollWrapper::Modify(SpChannel chan)
+bool EpollWrapper::Modify(SpChannel chan, int evts)
 {
-    int fd = chan->_fd;
+    int fd = chan->GetSocket();
+    if(_channels.find(fd) == _channels.end()){
+        return false;
+    }
     epoll_event evt{};
-    evt.events = chan->_events;
     evt.data.fd = fd; 
-    epoll_ctl(_epoll, EPOLL_CTL_MOD, fd, &evt);
-    _channels[fd] = chan;
+    evt.events = evts;
+    if(epoll_ctl(_epoll, EPOLL_CTL_MOD, fd, &evt) < 0){
+        minilog(LogLevel_e::ERROR, "epoll ctl mod error = %s", strerror(errno));
+        return false;
+    }
+    else{
+        _channels[fd]->SetEvents(evts);
+    }
 }
 
 std::vector<SpChannel> EpollWrapper::Poll(int timeout)

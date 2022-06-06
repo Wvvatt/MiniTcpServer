@@ -9,4 +9,3 @@ public:
 };
 
 using SpWorker = std::shared_ptr<WorkerInterface>;
-using WpWorker = std::weak_ptr<WorkerInterface>;
