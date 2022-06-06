@@ -33,7 +33,10 @@ public:
 	void HandleError(){
 		if (_onError) _onError(shared_from_this());
 	}
-	std::string& GetBuffer() { return _buffer;}
+	std::string& GetRecvBuffer() { return _recvBuffer;}
+	std::string& GetSendBuffer() { return _sendBuffer;}
+	void AppendRecvBuffer(const std::string& str) { _recvBuffer.append(str);}
+	void AppendSendBuffer(const std::string& str) { _sendBuffer.append(str);}
 private:
 	void SetEvents(int evts) { _events = evts;}
 private:
@@ -44,7 +47,8 @@ private:
 	CallBackFunc _onRead;
 	CallBackFunc _onSend;
 	CallBackFunc _onError;
-	std::string _buffer;
+	std::string _recvBuffer;
+	std::string _sendBuffer;
 };
 
 Channel::Channel(int fd, std::shared_ptr<void> priv, int evt, CallBackFunc connect, CallBackFunc read, CallBackFunc send, CallBackFunc error) :
@@ -56,7 +60,8 @@ Channel::Channel(int fd, std::shared_ptr<void> priv, int evt, CallBackFunc conne
 	_onSend(send),
 	_onError(error)
 {
-	_buffer.clear();
+	_recvBuffer.clear();
+	_sendBuffer.clear();
 }
 
 Channel::~Channel()

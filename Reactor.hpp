@@ -39,7 +39,8 @@ private:
 	{
 		ADD = 0,
 		DELETE,
-		UPDATE
+		ENABLE,
+		DISABLE
 	};
 	struct ChannelAction
 	{
@@ -130,7 +131,7 @@ void Reactor::SetThreadId(const std::thread::id &id)
 
 void Reactor::AddChannel(SpChannel chan)
 {
-	PushChannel(ActionType_e::ADD, chan, 0);
+	PushChannel(ActionType_e::ADD, chan, chan->GetEvents());
 }
 
 void Reactor::DelChannel(SpChannel chan)
@@ -140,26 +141,19 @@ void Reactor::DelChannel(SpChannel chan)
 
 void Reactor::EnableEvents(SpChannel chan, ChannelEvent_e evts)
 {
-	int oldEvents = chan->GetEvents();
-	int newEvents = oldEvents | evts;
-	PushChannel(ActionType_e::UPDATE, chan, newEvents);
+	PushChannel(ActionType_e::ENABLE, chan, evts);
 }
 
 void Reactor::DisableEvents(SpChannel chan, ChannelEvent_e evts)
 {
-	int oldEvents = chan->GetEvents();
-	if (oldEvents & evts)
-	{ //旧事件中有这个事件
-		int newEvents = oldEvents ^ evts;
-		PushChannel(ActionType_e::UPDATE, chan, newEvents);
-	}
+	PushChannel(ActionType_e::DISABLE, chan, evts);
 }
 
 void Reactor::PushChannel(ActionType_e action, SpChannel chan, int evts)
 {
 	{
 		std::lock_guard<std::mutex> lock(_pendingMutex);
-		// minilog(LogLevel_e::DEBUG, "action = %d, channel(fd = %d, events = %d)", action, chan->_fd, chan->_events);
+		//minilog(LogLevel_e::DEBUG, "action = %d, channel(fd = %d, events = %d), new events = %d", action, chan->GetSocket(), chan->GetEvents(), evts);
 		_pendingChanlActions.push({action, chan, evts});
 	}
 	if (!isInSelfWorkThread())
@@ -187,7 +181,6 @@ void Reactor::handlePendingChannel()
 		auto channel = chaAct.channel;
 		auto action = chaAct.action;
 		auto evts = chaAct.events;
-		minilog(LogLevel_e::DEBUG, "[%s] pending num = %d, handle channel(fd = %d, events = %d), action = %d, new events = %d",  _name.c_str(), _pendingChanlActions.size(), channel->GetSocket(), channel->GetEvents(), action, evts);
 		switch (action)
 		{
 		case ActionType_e::ADD:
@@ -196,6 +189,7 @@ void Reactor::handlePendingChannel()
 				minilog(LogLevel_e::WARRNIG, "[%s] channel(fd = %d) has already in epoll(fd = %d)", _name.c_str(), channel->GetSocket(), _epoll->GetEpollFd());
 			}
 			else{
+				minilog(LogLevel_e::DEBUG, "[%s] add channel(fd = %d, events = %d)", _name.c_str(), channel->GetSocket(), channel->GetEvents());
 				_epoll->Add(channel);
 			}
 			break;
@@ -205,16 +199,32 @@ void Reactor::handlePendingChannel()
 				minilog(LogLevel_e::WARRNIG, "[%s] This channel(fd = %d) is not in epoll(fd = %d)", _name.c_str(), channel->GetSocket(), _epoll->GetEpollFd());
 			}
 			else{
+				minilog(LogLevel_e::DEBUG, "[%s] delete channel(fd = %d, events = %d)", _name.c_str(), channel->GetSocket(), channel->GetEvents());
 				_epoll->Delete(channel);
 			}
 			break;
-		case ActionType_e::UPDATE:
+		case ActionType_e::ENABLE:
 			if (!_epoll->IsChannelInEpoll(channel))
 			{
 				minilog(LogLevel_e::ERROR, "[%s] This channel(fd = %d) is not in epoll(fd = %d)", _name.c_str(), channel->GetSocket(), _epoll->GetEpollFd());
 			}
 			else{
-				_epoll->Modify(channel, evts);
+				int oldEvts = channel->GetEvents();
+				int newEvts = channel->GetEvents() | evts;
+				_epoll->Modify(channel, newEvts);
+				minilog(LogLevel_e::DEBUG, "[%s] enable events %d, channel(fd = %d, events %d -> %d)", _name.c_str(), evts, channel->GetSocket(), oldEvts, channel->GetEvents());
+			}
+			break;
+		case ActionType_e::DISABLE:
+			if (!_epoll->IsChannelInEpoll(channel))
+			{
+				minilog(LogLevel_e::ERROR, "[%s] This channel(fd = %d) is not in epoll(fd = %d)", _name.c_str(), channel->GetSocket(), _epoll->GetEpollFd());
+			}
+			else{
+				int oldEvts = channel->GetEvents();
+				int newEvts = channel->GetEvents() & ~evts;
+				_epoll->Modify(channel, newEvts);
+				minilog(LogLevel_e::DEBUG, "[%s] disable events %d, channel(fd = %d, events %d -> %d)", _name.c_str(), evts, channel->GetSocket(), oldEvts, channel->GetEvents());
 			}
 			break;
 		default:

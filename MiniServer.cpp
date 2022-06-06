@@ -20,19 +20,21 @@ void onRead(SpChannel chan)
     SpReactor re = std::static_pointer_cast<Reactor>(chan->GetSpPrivData());
     char recvBuffer[1024] = {};
     int ret = recv(fd, recvBuffer, sizeof(recvBuffer), 0);
-    minilog(LogLevel_e::DEBUG, "onRead ret = %d", ret);
     if (ret == 0) {
         minilog(LogLevel_e::WARRNIG, "peer close");
         re->DelChannel(chan);
     }
-    else if (ret < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
-        minilog(LogLevel_e::ERROR, strerror(errno));
-        re->DelChannel(chan);
+    else if (ret < 0) {
+        minilog(LogLevel_e::DEBUG, "onRead ret < 0  errno = %d", errno);
+        if(!(errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)){
+            minilog(LogLevel_e::ERROR, strerror(errno));
+            re->DelChannel(chan);
+        }
     }
-    else {
-        chan->GetBuffer().clear();
-        chan->GetBuffer() = recvBuffer;
-        std::transform(chan->GetBuffer().begin(), chan->GetBuffer().end(), chan->GetBuffer().begin(), ::toupper);
+    else{
+        chan->GetSendBuffer().clear();
+        chan->AppendSendBuffer(std::string(recvBuffer));
+        std::transform(chan->GetSendBuffer().begin(), chan->GetSendBuffer().end(), chan->GetSendBuffer().begin(), ::toupper);
         re->EnableEvents(chan, ChannelEvent_e::OUT);
     }
     return;
@@ -41,14 +43,14 @@ void onRead(SpChannel chan)
 void onSend(SpChannel chan)
 {
     SpReactor re = std::static_pointer_cast<Reactor>(chan->GetSpPrivData());
-    if (!chan->GetBuffer().empty()) {
-        auto sendLen = send(chan->GetSocket(), chan->GetBuffer().c_str(), chan->GetBuffer().size(), 0);
+    if (!chan->GetSendBuffer().empty()) {
+        auto sendLen = send(chan->GetSocket(), chan->GetSendBuffer().c_str(), chan->GetSendBuffer().size(), 0);
         minilog(LogLevel_e::DEBUG, "onSend sendLen = %d", sendLen);
         if (sendLen > 0) {
-            chan->GetBuffer() = chan->GetBuffer().substr(sendLen);
+            chan->GetSendBuffer() = chan->GetSendBuffer().substr(sendLen);
         }
     }
-    if (chan->GetBuffer().empty()) {
+    if (chan->GetSendBuffer().empty()) {
         re->DisableEvents(chan, ChannelEvent_e::OUT);
     }
     return;
