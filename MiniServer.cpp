@@ -32,6 +32,7 @@ void onRead(SpChannel chan)
         }
     }
     else{
+        minilog(LogLevel_e::DEBUG, "onRead ret = %d", ret);
         chan->GetSendBuffer().clear();
         chan->AppendSendBuffer(std::string(recvBuffer));
         std::transform(chan->GetSendBuffer().begin(), chan->GetSendBuffer().end(), chan->GetSendBuffer().begin(), ::toupper);
@@ -72,7 +73,7 @@ void onConnect(SpChannel chan)
     }
     else {
         fcntl(clientFd, F_SETFL, O_NONBLOCK);
-        re->AddChannel(CreateSpChannelReadSend(clientFd, re, ChannelEvent_e::IN, onRead, onSend, nullptr));
+        re->AddChannel(CreateSpChannelReadSend(clientFd, re, onRead, onSend, nullptr), ChannelEvent_e::IN);
     }
 }
 
@@ -90,7 +91,7 @@ int main()
     subThrd.AddWorker(subRe);
     subThrd.Start();
 
-    listenRe->AddChannel(CreateSpChannelListen(12222, subRe, onConnect, nullptr));
+    listenRe->AddChannel(CreateSpChannelListen(12222, subRe, onConnect, nullptr), ChannelEvent_e::IN);
 
     sem_wait(sem);
     //listenThrd.Stop();

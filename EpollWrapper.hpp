@@ -12,10 +12,10 @@ class EpollWrapper
 public:
     EpollWrapper();
     ~EpollWrapper();
-    bool Add(SpChannel);
+    bool Add(SpChannel, ChannelEvent_e);
     bool Delete(SpChannel);
-    bool Modify(SpChannel, int);
-    std::vector<SpChannel> Poll(int);
+    bool Modify(SpChannel, ChannelEvent_e);
+    int PollOnce(int);
 
     bool IsChannelInEpoll(SpChannel) const;
     size_t GetChannelNum() const;
@@ -40,20 +40,22 @@ EpollWrapper::~EpollWrapper()
     close(_epoll);
 }
 
-bool EpollWrapper::Add(SpChannel chan) 
+bool EpollWrapper::Add(SpChannel chan, ChannelEvent_e evts) 
 {
     int fd = chan->GetSocket();
     if(_channels.find(fd) != _channels.end()){
+        Modify(chan, evts);
         return true;
     }
     epoll_event evt{};
-    evt.events = chan->GetEvents();
+    evt.events = evts;
     evt.data.fd = fd;
     if(epoll_ctl(_epoll, EPOLL_CTL_ADD, fd, &evt) < 0){
         minilog(LogLevel_e::ERROR, "epoll ctl add error = %s", strerror(errno));
         return false;
     }
     else{
+        chan->SetEvents(evts);
         _channels[fd] = chan;
         return true;
     } 
@@ -79,7 +81,7 @@ bool EpollWrapper::Delete(SpChannel chan)
     }
 }
 
-bool EpollWrapper::Modify(SpChannel chan, int evts)
+bool EpollWrapper::Modify(SpChannel chan, ChannelEvent_e evts)
 {
     int fd = chan->GetSocket();
     if(_channels.find(fd) == _channels.end()){
@@ -98,22 +100,46 @@ bool EpollWrapper::Modify(SpChannel chan, int evts)
     }
 }
 
-std::vector<SpChannel> EpollWrapper::Poll(int timeout)
+int EpollWrapper::PollOnce(int timeout)
 {
-    std::vector<SpChannel> ret = {};
     epoll_event activeEvts[EPOLL_MAX_EVENT] = {};
-    auto activeFds = epoll_wait(_epoll, activeEvts, EPOLL_MAX_EVENT, timeout);
-    if (activeFds < 0){
-        minilog(LogLevel_e::ERROR, "epoll_wait error!");
-        return std::move(ret);
-    }
-    for (int i = 0; i < activeFds; i++){
-        int fd = activeEvts[i].data.fd;
-        if(_channels.find(fd) != _channels.end()){
-            ret.push_back(_channels[fd]);
+    int activeNums = epoll_wait(_epoll, activeEvts, EPOLL_MAX_EVENT, timeout);
+    if (activeNums < 0)
+    {
+        if (errno != EINTR)
+        {
+            minilog(LogLevel_e::ERROR, "epoll_wait error!");
+        }
+        else
+        {
+            activeNums = 0;
         }
     }
-    return std::move(ret);
+    else
+    {
+        for (int i = 0; i < activeNums; i++)
+        {
+            int fd = activeEvts[i].data.fd;
+            int evts = activeEvts[i].events;
+            if(_channels.find(fd) != _channels.end()){
+                auto chan = _channels[fd];
+                if(evts & EPOLLIN){
+                    if(chan->isListenChannel()){
+                        chan->HandleConnect();
+                        continue;
+                    }
+                    chan->HandleRead();
+                }
+                if(evts & EPOLLOUT){
+                    chan->HandleSend();
+                }
+            }
+            else{
+                epoll_ctl(_epoll, EPOLL_CTL_DEL, fd, &activeEvts[i]);
+            }
+        }
+    }
+    return activeNums;
 }
 
 bool EpollWrapper::IsChannelInEpoll(SpChannel chan) const

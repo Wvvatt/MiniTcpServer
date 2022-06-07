@@ -18,10 +18,4 @@
 #include <sys/epoll.h>	// epoll
 
 constexpr int EPOLL_MAX_EVENT = 4096;
-
-enum ChannelEvent_e : int
-{
-	IN = 0x01,
-	OUT = 0x04
-};
 #define sleep_ms(x) usleep(x * 1000)

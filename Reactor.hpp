@@ -25,7 +25,7 @@ public:
 	bool Work() override;
 	void SetThreadId(const std::thread::id &) override;
 
-	void AddChannel(SpChannel);
+	void AddChannel(SpChannel, ChannelEvent_e);
 	void DelChannel(SpChannel);
 	void EnableEvents(SpChannel, ChannelEvent_e);
 	void DisableEvents(SpChannel, ChannelEvent_e);
@@ -46,9 +46,9 @@ private:
 	{
 		ActionType_e action;
 		SpChannel channel;
-		int events;
+		ChannelEvent_e events;
 	};
-	void PushChannel(ActionType_e, SpChannel, int);
+	void PushChannel(ActionType_e action, SpChannel chan, ChannelEvent_e evts);
 	void handlePendingChannel();
 	
 private:
@@ -93,8 +93,8 @@ Reactor::~Reactor()
 void Reactor::Init()
 {
 	socketpair(AF_UNIX, SOCK_STREAM, 0, _wakeUpFd);
-	auto wakeUpChannel = CreateSpChannelReadSend(_wakeUpFd[1], shared_from_this(), ChannelEvent_e::IN, wake_up_call_back, nullptr, nullptr);
-	_epoll->Add(wakeUpChannel);
+	auto wakeUpChannel = CreateSpChannelReadSend(_wakeUpFd[1], shared_from_this(), wake_up_call_back, nullptr, nullptr);
+	_epoll->Add(wakeUpChannel, ChannelEvent_e::IN);
 	_init = true;
 }
 
@@ -103,23 +103,7 @@ bool Reactor::Work()
 	if(!_init){
 		Init();
 	}
-	auto activeChans = _epoll->Poll(1000);
-	for (auto chan : activeChans)
-	{
-		if (chan->GetEvents() & ChannelEvent_e::IN)
-		{
-			if (chan->isListenChannel())
-			{
-				chan->HandleConnect();
-				continue;
-			}
-			chan->HandleRead();
-		}
-		if (chan->GetEvents() & ChannelEvent_e::OUT)
-		{
-			chan->HandleSend();
-		}
-	}
+	_epoll->PollOnce(1000);
 	handlePendingChannel();
 	return true;
 }
@@ -129,14 +113,14 @@ void Reactor::SetThreadId(const std::thread::id &id)
 	_thrdId = id;
 }
 
-void Reactor::AddChannel(SpChannel chan)
+void Reactor::AddChannel(SpChannel chan, ChannelEvent_e evts)
 {
-	PushChannel(ActionType_e::ADD, chan, chan->GetEvents());
+	PushChannel(ActionType_e::ADD, chan, evts);
 }
 
 void Reactor::DelChannel(SpChannel chan)
 {
-	PushChannel(ActionType_e::DELETE, chan, 0);
+	PushChannel(ActionType_e::DELETE, chan, ChannelEvent_e::NONE);
 }
 
 void Reactor::EnableEvents(SpChannel chan, ChannelEvent_e evts)
@@ -149,7 +133,7 @@ void Reactor::DisableEvents(SpChannel chan, ChannelEvent_e evts)
 	PushChannel(ActionType_e::DISABLE, chan, evts);
 }
 
-void Reactor::PushChannel(ActionType_e action, SpChannel chan, int evts)
+void Reactor::PushChannel(ActionType_e action, SpChannel chan, ChannelEvent_e evts)
 {
 	{
 		std::lock_guard<std::mutex> lock(_pendingMutex);
@@ -190,7 +174,7 @@ void Reactor::handlePendingChannel()
 			}
 			else{
 				minilog(LogLevel_e::DEBUG, "[%s] add channel(fd = %d, events = %d)", _name.c_str(), channel->GetSocket(), channel->GetEvents());
-				_epoll->Add(channel);
+				_epoll->Add(channel, evts);
 			}
 			break;
 		case ActionType_e::DELETE:
@@ -209,8 +193,8 @@ void Reactor::handlePendingChannel()
 				minilog(LogLevel_e::ERROR, "[%s] This channel(fd = %d) is not in epoll(fd = %d)", _name.c_str(), channel->GetSocket(), _epoll->GetEpollFd());
 			}
 			else{
-				int oldEvts = channel->GetEvents();
-				int newEvts = channel->GetEvents() | evts;
+				ChannelEvent_e oldEvts = channel->GetEvents();
+				ChannelEvent_e newEvts = static_cast<ChannelEvent_e>(oldEvts | evts);
 				_epoll->Modify(channel, newEvts);
 				minilog(LogLevel_e::DEBUG, "[%s] enable events %d, channel(fd = %d, events %d -> %d)", _name.c_str(), evts, channel->GetSocket(), oldEvts, channel->GetEvents());
 			}
@@ -221,8 +205,8 @@ void Reactor::handlePendingChannel()
 				minilog(LogLevel_e::ERROR, "[%s] This channel(fd = %d) is not in epoll(fd = %d)", _name.c_str(), channel->GetSocket(), _epoll->GetEpollFd());
 			}
 			else{
-				int oldEvts = channel->GetEvents();
-				int newEvts = channel->GetEvents() & ~evts;
+				ChannelEvent_e oldEvts = channel->GetEvents();
+				ChannelEvent_e newEvts = static_cast<ChannelEvent_e>(oldEvts & ~evts);
 				_epoll->Modify(channel, newEvts);
 				minilog(LogLevel_e::DEBUG, "[%s] disable events %d, channel(fd = %d, events %d -> %d)", _name.c_str(), evts, channel->GetSocket(), oldEvts, channel->GetEvents());
 			}
