@@ -14,8 +14,6 @@ public:
 	virtual ~MiniThread();
 	MiniThread(const MiniThread&) = delete;
 	MiniThread& operator=(const MiniThread&) = delete;
-	void Start();
-	void Stop();
 	void AddWorker(SpWorker);
 	void DelWorker(SpWorker);
 private:
@@ -28,8 +26,8 @@ private:
 };
 
 MiniThread::MiniThread() :
-	_thread(std::thread(&MiniThread::Work, this)),
-	_running(false)
+	_running(true),
+	_thread(std::thread(&MiniThread::Work, this))
 {
 
 }
@@ -38,16 +36,6 @@ MiniThread::~MiniThread()
 {
 	_running = false;
 	_thread.join();
-}
-
-void MiniThread::Start()
-{
-	_running = true;
-}
-
-void MiniThread::Stop()
-{
-	_running = false;
 }
 
 void MiniThread::AddWorker(SpWorker worker)
@@ -82,4 +70,11 @@ void MiniThread::Work()
 			}
 		}
 	}
+}
+
+/* ---------------------- ref ptr -----------------------*/
+using SpThread = std::shared_ptr<MiniThread>;
+SpThread CreateSpThread()
+{
+	return std::make_shared<MiniThread>();
 }
