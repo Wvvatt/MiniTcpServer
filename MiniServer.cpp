@@ -2,8 +2,7 @@
 #include <signal.h>
 #include <algorithm>
 #include "MiniLog.hpp"
-#include "MiniThread.hpp"
-#include "Reactor.hpp"
+#include "ReactorThread.hpp"
 
 static sem_t *sem = new sem_t;
 
@@ -81,17 +80,11 @@ int main()
 {
     sem_init(sem, 0, 0);
     signal(SIGINT, signal_handler);
-    
-    SpReactor listenRe = CreateSpReactor("listen reactor");
-    SpReactor subRe = CreateSpReactor("sub reactor");
-    MiniThread listenThrd;
-    listenThrd.AddWorker(listenRe);
-    listenThrd.Start();
-    MiniThread subThrd;
-    subThrd.AddWorker(subRe);
-    subThrd.Start();
 
-    listenRe->AddChannel(CreateSpChannelListen(12222, subRe, onConnect, nullptr), ChannelEvent_e::IN);
+    SpReactThrd mainRe = CreateSpReactThrd("main_reactor");
+    SpReactThrd subRe = CreateSpReactThrd("sub_reactor");
+
+    mainRe->Reactor()->AddChannel(CreateSpChannelListen(12222, subRe->Reactor(), onConnect, nullptr), ChannelEvent_e::IN);
 
     sem_wait(sem);
     //listenThrd.Stop();
