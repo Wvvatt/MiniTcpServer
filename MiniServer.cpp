@@ -81,8 +81,10 @@ int main()
     sem_init(sem, 0, 0);
     signal(SIGINT, signal_handler);
 
-    SpReactThrd mainRe = CreateSpReactThrd("main_reactor");
-    SpReactThrd subRe = CreateSpReactThrd("sub_reactor");
+    SpReactorThread mainRe = CreateSpReactorThread("main_reactor");
+    mainRe->Open();
+    SpReactorThread subRe = CreateSpReactorThread("sub_reactor");
+    subRe->Open();
 
     mainRe->Reactor()->AddChannel(CreateSpChannelListen(12222, subRe->Reactor(), onConnect, nullptr), ChannelEvent_e::IN);
 

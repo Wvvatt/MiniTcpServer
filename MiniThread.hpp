@@ -57,6 +57,9 @@ void MiniThread::Work()
 {
 	while (_running) {
 		std::lock_guard<std::mutex> lock(_threadMutex);
+		if(_workers.size() == 0){
+			sleep_ms(10);
+		}
 		for (auto worker : _workers) {
 			if (worker) {
 				if (!worker->Work())

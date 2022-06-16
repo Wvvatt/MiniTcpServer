@@ -32,14 +32,12 @@ bool ReactorThread::Open()
     if(!_reactor || !_thread){
         return false;
     }
-    _thread->Start();
     _thread->AddWorker(_reactor);
 }
 
 void ReactorThread::Close()
 {
     _thread->DelWorker(_reactor);
-    _thread->Stop();
 }
 
 using SpReactorThread = std::shared_ptr<ReactorThread>;
