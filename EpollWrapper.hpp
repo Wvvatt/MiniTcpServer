@@ -7,7 +7,7 @@
 #include "MiniLog.hpp"
 #include "Channel.hpp"
 
-class EpollWrapper
+class EpollWrapper : noncopyable
 {
 public:
     EpollWrapper();
@@ -21,12 +21,15 @@ public:
     size_t GetChannelNum() const;
     int GetEpollFd() const { return _epoll;}
 private:
+    static const int kInitEventsListSize = 16;
     int _epoll;
     std::map<int, SpChannel> _channels;
+    std::vector<epoll_event> _eventsList;
 };
 
 EpollWrapper::EpollWrapper():
-    _epoll(epoll_create(EPOLL_MAX_EVENT))
+    _epoll(epoll_create1(EPOLL_CLOEXEC)),
+    _eventsList(kInitEventsListSize)
 {
 
 }
@@ -102,32 +105,31 @@ bool EpollWrapper::Modify(SpChannel chan, ChannelEvent_e evts)
 
 int EpollWrapper::PollOnce(int timeout)
 {
-    epoll_event activeEvts[EPOLL_MAX_EVENT] = {};
-    int activeNums = epoll_wait(_epoll, activeEvts, EPOLL_MAX_EVENT, timeout);
+    int activeNums = epoll_wait(_epoll, &_eventsList[0], static_cast<int>(_eventsList.size()), timeout);
     if (activeNums < 0)
     {
-        if (errno != EINTR)
-        {
+        if (errno != EINTR){
             minilog(LogLevel_e::ERROR, "epoll_wait error!");
         }
-        else
-        {
+        else{
             activeNums = 0;
         }
     }
+    else if(0 == activeNums){
+        // nothing happen
+    }
     else
     {
+        if(static_cast<size_t>(activeNums) == _eventsList.size()){
+            _eventsList.resize(_eventsList.size()*2);
+        }   
         for (int i = 0; i < activeNums; i++)
         {
-            int fd = activeEvts[i].data.fd;
-            int evts = activeEvts[i].events;
+            int fd = _eventsList[i].data.fd;
+            int evts = _eventsList[i].events;
             if(_channels.find(fd) != _channels.end()){
                 auto chan = _channels[fd];
                 if(evts & EPOLLIN){
-                    if(chan->isListenChannel()){
-                        chan->HandleConnect();
-                        continue;
-                    }
                     chan->HandleRead();
                 }
                 if(evts & EPOLLOUT){
@@ -135,7 +137,7 @@ int EpollWrapper::PollOnce(int timeout)
                 }
             }
             else{
-                epoll_ctl(_epoll, EPOLL_CTL_DEL, fd, &activeEvts[i]);
+                epoll_ctl(_epoll, EPOLL_CTL_DEL, fd, &_eventsList[i]);
             }
         }
     }

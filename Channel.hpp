@@ -12,26 +12,20 @@ enum ChannelEvent_e : int
 };
 
 class Channel;
-using SpChannel = std::shared_ptr<Channel>;
-using CallBackFunc = std::function<void(SpChannel)>;
+using CallBackFunc = std::function<void(std::shared_ptr<Channel>)>;
 class EpollWrapper;
-class Channel : public std::enable_shared_from_this<Channel>
+class Channel : public std::enable_shared_from_this<Channel>, noncopyable
 {
 	friend class EpollWrapper;
 public:
 	Channel() = delete;;
-	Channel(int fd, std::shared_ptr<void> priv, CallBackFunc connect, CallBackFunc read, CallBackFunc send, CallBackFunc error);
-	Channel(const Channel&) = delete;
+	Channel(int fd, std::shared_ptr<void> priv, CallBackFunc read, CallBackFunc send, CallBackFunc error);
 	~Channel();
 
 	int GetSocket() const { return _fd;}
 	ChannelEvent_e GetEvents() const { return _events;}
 	std::shared_ptr<void> GetSpPrivData() { return _priv.lock();}
-	bool isListenChannel() const { return _onConnect != nullptr;}
 
-	void HandleConnect(){
-		if (_onConnect) _onConnect(shared_from_this());
-	}
 	void HandleRead(){
 		if (_onRead) _onRead(shared_from_this());
 	}
@@ -51,7 +45,6 @@ private:
 	int _fd;
 	std::weak_ptr<void> _priv;		//使用weak_ptr避免出现循环引用
 	ChannelEvent_e _events;
-	CallBackFunc _onConnect;;
 	CallBackFunc _onRead;
 	CallBackFunc _onSend;
 	CallBackFunc _onError;
@@ -59,10 +52,9 @@ private:
 	std::string _sendBuffer;
 };
 
-Channel::Channel(int fd, std::shared_ptr<void> priv, CallBackFunc connect, CallBackFunc read, CallBackFunc send, CallBackFunc error) :
+Channel::Channel(int fd, std::shared_ptr<void> priv, CallBackFunc read, CallBackFunc send, CallBackFunc error) :
 	_fd(fd),
 	_priv(priv),
-	_onConnect(connect),
 	_onRead(read),
 	_onSend(send),
 	_onError(error)
@@ -80,9 +72,10 @@ Channel::~Channel()
 
 
 /*--------------------------------- shared_ptr --------------------*/
-SpChannel CreateSpChannel(int fd, std::shared_ptr<void> priv, CallBackFunc connect, CallBackFunc read, CallBackFunc send, CallBackFunc error)
+using SpChannel = std::shared_ptr<Channel>;
+SpChannel CreateSpChannel(int fd, std::shared_ptr<void> priv, CallBackFunc read, CallBackFunc send, CallBackFunc error)
 {
-	return std::make_shared<Channel>(fd, priv, connect, read, send, error);
+	return std::make_shared<Channel>(fd, priv, read, send, error);
 }
 
 SpChannel CreateSpChannelListen(int port, std::shared_ptr<void> priv, CallBackFunc connect, CallBackFunc error)
@@ -95,10 +88,5 @@ SpChannel CreateSpChannelListen(int port, std::shared_ptr<void> priv, CallBackFu
 	bind(listenFd, (sockaddr*)&sin, sizeof(sin));
 	listen(listenFd, 20);
 	fcntl(listenFd, F_SETFL, O_NONBLOCK);
-	return std::make_shared<Channel>(listenFd, priv, connect, nullptr, nullptr, error);
-}
-
-SpChannel CreateSpChannelReadSend(int fd, std::shared_ptr<void> priv, CallBackFunc read, CallBackFunc send, CallBackFunc error)
-{
-	return std::make_shared<Channel>(fd, priv, nullptr, read, send, error);
+	return std::make_shared<Channel>(listenFd, priv, connect, nullptr, error);
 }

@@ -16,7 +16,7 @@
 
 class Reactor;
 using SpReactor = std::shared_ptr<Reactor>;
-class Reactor : public WorkerInterface, public std::enable_shared_from_this<Reactor>
+class Reactor : public WorkerInterface, public std::enable_shared_from_this<Reactor>, noncopyable
 {
 public:
 	Reactor() = delete;
@@ -30,11 +30,9 @@ public:
 	void EnableEvents(SpChannel, ChannelEvent_e);
 	void DisableEvents(SpChannel, ChannelEvent_e);
 
-	bool isInSelfWorkThread() { return std::this_thread::get_id() == _thrdId; }
-	void WakeUp();
 	std::string GetName() const { return _name; };
 private:
-	void Init();
+	
 	enum class ActionType_e : uint8_t
 	{
 		ADD = 0,
@@ -42,12 +40,15 @@ private:
 		ENABLE,
 		DISABLE
 	};
-	struct ChannelAction
+	struct Operation
 	{
 		ActionType_e action;
 		SpChannel channel;
 		ChannelEvent_e events;
 	};
+	void Init();
+	void wakeup();
+	bool isInSelfWorkThread() { return std::this_thread::get_id() == _thrdId; }
 	void PushChannel(ActionType_e action, SpChannel chan, ChannelEvent_e evts);
 	void handlePendingChannel();
 	
@@ -55,7 +56,7 @@ private:
 	bool _init;
 	std::string _name;
 	std::mutex _pendingMutex;
-	std::queue<ChannelAction> _pendingChanlActions;
+	std::queue<Operation> _pendingOperations;
 	SpEpoll _epoll;
 	bool _running;
 	std::thread::id _thrdId;
@@ -93,7 +94,7 @@ Reactor::~Reactor()
 void Reactor::Init()
 {
 	socketpair(AF_UNIX, SOCK_STREAM, 0, _wakeUpFd);
-	auto wakeUpChannel = CreateSpChannelReadSend(_wakeUpFd[1], shared_from_this(), wake_up_call_back, nullptr, nullptr);
+	auto wakeUpChannel = CreateSpChannel(_wakeUpFd[1], shared_from_this(), wake_up_call_back, nullptr, nullptr);
 	_epoll->Add(wakeUpChannel, ChannelEvent_e::IN);
 	_init = true;
 }
@@ -138,15 +139,15 @@ void Reactor::PushChannel(ActionType_e action, SpChannel chan, ChannelEvent_e ev
 	{
 		std::lock_guard<std::mutex> lock(_pendingMutex);
 		//minilog(LogLevel_e::DEBUG, "action = %d, channel(fd = %d, events = %d), new events = %d", action, chan->GetSocket(), chan->GetEvents(), evts);
-		_pendingChanlActions.push({action, chan, evts});
+		_pendingOperations.push({action, chan, evts});
 	}
 	if (!isInSelfWorkThread())
 	{
-		WakeUp();
+		wakeup();
 	}
 }
 
-void Reactor::WakeUp()
+void Reactor::wakeup()
 {
 	char one = '1';
 	auto n = write(_wakeUpFd[0], &one, sizeof(one));
@@ -159,12 +160,12 @@ void Reactor::WakeUp()
 void Reactor::handlePendingChannel()
 {
 	std::lock_guard<std::mutex> lock(_pendingMutex);
-	while (_pendingChanlActions.size() > 0)
+	while (_pendingOperations.size() > 0)
 	{
-		auto chaAct = _pendingChanlActions.front();
-		auto channel = chaAct.channel;
-		auto action = chaAct.action;
-		auto evts = chaAct.events;
+		auto operation = _pendingOperations.front();
+		auto channel = operation.channel;
+		auto action = operation.action;
+		auto evts = operation.events;
 		switch (action)
 		{
 		case ActionType_e::ADD:
@@ -214,7 +215,7 @@ void Reactor::handlePendingChannel()
 		default:
 			break;
 		}
-		_pendingChanlActions.pop();
+		_pendingOperations.pop();
 	}
 }
 

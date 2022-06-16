@@ -73,7 +73,7 @@ void onConnect(SpChannel chan)
     }
     else {
         fcntl(clientFd, F_SETFL, O_NONBLOCK);
-        re->AddChannel(CreateSpChannelReadSend(clientFd, re, onRead, onSend, nullptr), ChannelEvent_e::IN);
+        re->AddChannel(CreateSpChannel(clientFd, re, onRead, onSend, nullptr), ChannelEvent_e::IN);
     }
 }
 

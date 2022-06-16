@@ -17,5 +17,14 @@
 #include <fcntl.h>		// ctrl socket
 #include <sys/epoll.h>	// epoll
 
-constexpr int EPOLL_MAX_EVENT = 4096;
 #define sleep_ms(x) usleep(x * 1000)
+class noncopyable
+{
+ public:
+  noncopyable(const noncopyable&) = delete;
+  void operator=(const noncopyable&) = delete;
+
+ protected:
+  noncopyable() = default;
+  ~noncopyable() = default;
+};
